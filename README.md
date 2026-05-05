@@ -4,11 +4,6 @@
 
 Make sure you have **Node.js 18+** installed: https://nodejs.org
 
-Install Expo CLI globally:
-```bash
-npm install -g expo-cli
-```
-
 ## 2. Install Project Dependencies
 
 Open a terminal in the `GeoJournal` folder and run:
@@ -19,43 +14,44 @@ npm install
 ## 3. Run the App
 
 ```bash
-npx expo start
+npx expo start --localhost
 ```
 
-This opens the Expo Dev Tools. You can then:
-- **Scan the QR code** with the **Expo Go** app on your phone (iOS or Android)
-- Press **`i`** to open the iOS Simulator (requires Xcode on Mac)
-- Press **`a`** to open the Android Emulator (requires Android Studio)
+Then press **`i`** to open the iOS Simulator (requires Xcode on Mac).
 
-## 4. Install Expo Go on your phone
-- iOS: https://apps.apple.com/app/expo-go/id982107779
-- Android: https://play.google.com/store/apps/details?id=host.exp.exponent
+> **Note:** Running on a physical iPhone via Expo Go requires your phone and Mac to be on the same Wi-Fi network. If the connection fails, use `npx expo run:ios` to build and install the app directly.
 
 ## Project Structure
 
 ```
 GeoJournal/
 ├── app/
-│   ├── _layout.jsx          # Root layout
+│   ├── _layout.jsx          # Root layout + auth guard
+│   ├── (auth)/              # Login / register screens
 │   └── (tabs)/
 │       ├── _layout.jsx      # Tab bar config
-│       ├── index.jsx        # Explore (map + nearby places)
-│       ├── camera.jsx       # Smart camera with GPS + weather
+│       ├── index.jsx        # Explore (map + nearby places + compass)
+│       ├── camera.jsx       # Camera with GPS overlay + weather
 │       ├── journal.jsx      # Photo gallery (grid / map view)
-│       └── profile.jsx      # Travel stats dashboard
+│       └── profile.jsx      # Travel stats + sign out
+├── context/
+│   └── AuthContext.jsx      # Firebase auth state
+├── utils/
+│   ├── geofencing.js        # Background geofencing task
+│   ├── notifications.js     # Push notification helpers
+│   ├── places.js            # Nearby places fetching
+│   └── stats.js             # AsyncStorage stats tracking
+├── firebaseConfig.js        # Firebase project config
 ├── app.json                 # Expo config + permissions
 ├── package.json
 └── babel.config.js
 ```
 
-## APIs Used
-- **Open-Meteo** (weather) – free, no API key needed
-- **expo-location** – GPS
+## APIs & Services Used
+- **Firebase** – authentication
+- **Open-Meteo** – weather (free, no API key needed)
+- **expo-location** – GPS + geofencing
 - **expo-camera** – camera
 - **react-native-maps** – maps
-
-## Next Steps
-- Connect a real "nearby places" API (e.g. Foursquare or Google Places)
-- Save photo metadata (GPS, weather) to AsyncStorage
-- Add geofencing notifications with expo-location
-- Show GPS-tagged photos as pins on the Journal map
+- **AsyncStorage** – local storage for photo locations and stats
+- **expo-notifications** – push notifications
