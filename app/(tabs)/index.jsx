@@ -1,29 +1,44 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, View, Text, TouchableOpacity,
-  ScrollView, ActivityIndicator, Dimensions,
+  ScrollView, ActivityIndicator, Linking, Platform,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { Magnetometer } from 'expo-sensors';
 import { Ionicons } from '@expo/vector-icons';
+import { fetchNearbyPlaces } from '../../utils/places';
+import { startGeofencing, stopGeofencing } from '../../utils/geofencing';
 
-const { height } = Dimensions.get('window');
+function magnetometerToDegrees({ x, y }) {
+  let angle = Math.atan2(y, x) * (180 / Math.PI);
+  if (angle < 0) angle += 360;
+  return Math.round(angle);
+}
 
-// Sample nearby places (replace with real API later)
-const SAMPLE_PLACES = [
-  { id: '1', name: 'City Museum', category: 'Museum', distance: '0.3 km', lat: 0.001, lng: 0.001 },
-  { id: '2', name: 'Central Park',  category: 'Park',   distance: '0.5 km', lat: -0.002, lng: 0.002 },
-  { id: '3', name: 'Old Cathedral', category: 'Church', distance: '0.8 km', lat: 0.003, lng: -0.001 },
-];
+function compassLabel(deg) {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+function openDirections(latitude, longitude) {
+  const url = Platform.OS === 'ios'
+    ? `maps://?daddr=${latitude},${longitude}&dirflg=w`
+    : `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=walking`;
+  Linking.openURL(url);
+}
 
 export default function ExploreScreen() {
   const mapRef = useRef(null);
   const [location, setLocation] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [places, setPlaces] = useState([]);
+  const [placesLoading, setPlacesLoading] = useState(false);
   const [selectedPlace, setSelectedPlace] = useState(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [heading, setHeading] = useState(0);
 
-  // Ask for location permission and get current position
+  // Location
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -34,7 +49,29 @@ export default function ExploreScreen() {
     })();
   }, []);
 
-  // Center map on user location
+  // Fetch real nearby places once we have location
+  useEffect(() => {
+    if (!location) return;
+    setPlacesLoading(true);
+    fetchNearbyPlaces(location.latitude, location.longitude)
+      .then((results) => {
+        setPlaces(results);
+        if (results.length > 0) {
+          startGeofencing(results).catch(() => {});
+        }
+      })
+      .catch(() => {})
+      .finally(() => setPlacesLoading(false));
+    return () => { stopGeofencing().catch(() => {}); };
+  }, [location]);
+
+  // Compass
+  useEffect(() => {
+    Magnetometer.setUpdateInterval(300);
+    const sub = Magnetometer.addListener((data) => setHeading(magnetometerToDegrees(data)));
+    return () => sub.remove();
+  }, []);
+
   const centerMap = () => {
     if (!location || !mapRef.current) return;
     mapRef.current.animateToRegion({
@@ -43,11 +80,6 @@ export default function ExploreScreen() {
       latitudeDelta: 0.01,
       longitudeDelta: 0.01,
     });
-  };
-
-  const openPlace = (place) => {
-    setSelectedPlace(place);
-    setPanelOpen(true);
   };
 
   if (loading) {
@@ -59,14 +91,12 @@ export default function ExploreScreen() {
     );
   }
 
-  // Default region (fallback if location denied)
   const region = location
     ? { latitude: location.latitude, longitude: location.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }
     : { latitude: 46.8, longitude: 8.2, latitudeDelta: 0.1, longitudeDelta: 0.1 };
 
   return (
     <View style={styles.container}>
-      {/* Full-screen map */}
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -75,22 +105,27 @@ export default function ExploreScreen() {
         showsUserLocation
         showsCompass
       >
-        {/* Pins for nearby places */}
-        {location && SAMPLE_PLACES.map((place) => (
+        {places.map((place) => (
           <Marker
             key={place.id}
-            coordinate={{
-              latitude: location.latitude + place.lat,
-              longitude: location.longitude + place.lng,
-            }}
+            coordinate={{ latitude: place.latitude, longitude: place.longitude }}
             pinColor="#4ECDC4"
             title={place.name}
-            onPress={() => openPlace(place)}
+            onPress={() => { setSelectedPlace(place); setPanelOpen(true); }}
           />
         ))}
       </MapView>
 
-      {/* Re-center button */}
+      {/* Compass */}
+      <View style={styles.compass}>
+        <View style={[styles.compassNeedle, { transform: [{ rotate: `${heading}deg` }] }]}>
+          <View style={styles.needleNorth} />
+          <View style={styles.needleSouth} />
+        </View>
+        <Text style={styles.compassLabel}>{compassLabel(heading)}</Text>
+      </View>
+
+      {/* Re-center */}
       <TouchableOpacity style={styles.centerBtn} onPress={centerMap}>
         <Ionicons name="locate" size={22} color="#fff" />
       </TouchableOpacity>
@@ -103,25 +138,40 @@ export default function ExploreScreen() {
           </TouchableOpacity>
           <Text style={styles.panelTitle}>{selectedPlace.name}</Text>
           <Text style={styles.panelSub}>{selectedPlace.category} · {selectedPlace.distance}</Text>
-          <TouchableOpacity style={styles.directionsBtn}>
+          <TouchableOpacity
+            style={styles.directionsBtn}
+            onPress={() => openDirections(selectedPlace.latitude, selectedPlace.longitude)}
+          >
             <Ionicons name="navigate" size={16} color="#fff" />
             <Text style={styles.directionsBtnText}>Get Walking Directions</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Nearby places horizontal list at bottom */}
+      {/* Nearby list */}
       {!panelOpen && (
         <View style={styles.listContainer}>
-          <Text style={styles.listTitle}>Nearby Places</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {SAMPLE_PLACES.map((place) => (
-              <TouchableOpacity key={place.id} style={styles.placeCard} onPress={() => openPlace(place)}>
-                <Text style={styles.placeName}>{place.name}</Text>
-                <Text style={styles.placeMeta}>{place.category} · {place.distance}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <Text style={styles.listTitle}>
+            Nearby Places {placesLoading ? '…' : `(${places.length})`}
+          </Text>
+          {placesLoading ? (
+            <ActivityIndicator color="#4ECDC4" style={{ marginVertical: 8 }} />
+          ) : places.length === 0 ? (
+            <Text style={styles.emptyText}>No places found nearby.</Text>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {places.map((place) => (
+                <TouchableOpacity
+                  key={place.id}
+                  style={styles.placeCard}
+                  onPress={() => { setSelectedPlace(place); setPanelOpen(true); }}
+                >
+                  <Text style={styles.placeName} numberOfLines={2}>{place.name}</Text>
+                  <Text style={styles.placeMeta}>{place.category} · {place.distance}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
         </View>
       )}
     </View>
@@ -133,15 +183,26 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a2e' },
   loadingText: { color: '#ccc', marginTop: 12 },
+  emptyText: { color: '#666', fontSize: 13, paddingVertical: 8 },
 
-  // Re-center button
+  compass: {
+    position: 'absolute', top: 50, left: 16,
+    backgroundColor: '#16213e', borderRadius: 36,
+    width: 56, height: 56,
+    justifyContent: 'center', alignItems: 'center',
+    elevation: 4, borderWidth: 1, borderColor: '#0f3460',
+  },
+  compassNeedle: { width: 4, height: 28, alignItems: 'center', justifyContent: 'center' },
+  needleNorth: { width: 4, height: 14, backgroundColor: '#FF6B6B', borderRadius: 2 },
+  needleSouth: { width: 4, height: 14, backgroundColor: '#888', borderRadius: 2 },
+  compassLabel: { color: '#fff', fontSize: 10, fontWeight: '700', marginTop: 2 },
+
   centerBtn: {
     position: 'absolute', top: 50, right: 16,
     backgroundColor: '#4ECDC4', borderRadius: 24,
     padding: 10, elevation: 4,
   },
 
-  // Slide-up panel
   panel: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: '#16213e', borderTopLeftRadius: 20, borderTopRightRadius: 20,
@@ -157,7 +218,6 @@ const styles = StyleSheet.create({
   },
   directionsBtnText: { color: '#fff', fontWeight: '600' },
 
-  // Nearby places list
   listContainer: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: '#16213e', borderTopLeftRadius: 20, borderTopRightRadius: 20,

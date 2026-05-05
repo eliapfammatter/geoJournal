@@ -6,8 +6,9 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import * as MediaLibrary from 'expo-media-library';
 import { Ionicons } from '@expo/vector-icons';
+import { sendPhotoSavedNotification } from '../../utils/notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Fetch current weather from open-meteo (free, no API key needed)
 async function fetchWeather(lat, lon) {
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
@@ -15,7 +16,6 @@ async function fetchWeather(lat, lon) {
     const data = await res.json();
     const code = data.current_weather.weathercode;
     const temp = Math.round(data.current_weather.temperature);
-    // Simple weather code → emoji mapping
     const emoji = code === 0 ? '☀️' : code <= 3 ? '⛅' : code <= 67 ? '🌧️' : '❄️';
     return `${emoji} ${temp}°C`;
   } catch {
@@ -32,7 +32,6 @@ export default function CameraScreen() {
   const [facing, setFacing] = useState('back');
   const [capturing, setCapturing] = useState(false);
 
-  // Get location and weather on mount
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -44,7 +43,6 @@ export default function CameraScreen() {
     })();
   }, []);
 
-  // Ask for camera permission if needed
   if (!permission) return <View style={styles.center}><ActivityIndicator color="#4ECDC4" /></View>;
   if (!permission.granted) {
     return (
@@ -57,15 +55,27 @@ export default function CameraScreen() {
     );
   }
 
-  // Take a photo and save it to the media library
   const takePhoto = async () => {
     if (!cameraRef.current || capturing) return;
     setCapturing(true);
     try {
       if (!mediaPermission?.granted) await requestMediaPermission();
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
-      await MediaLibrary.saveToLibraryAsync(photo.uri);
-      // TODO: also save location + weather metadata to local storage
+      const asset = await MediaLibrary.createAssetAsync(photo.uri);
+
+      if (location) {
+        const stored = JSON.parse(await AsyncStorage.getItem('photoLocations') || '{}');
+        stored[asset.id] = { latitude: location.latitude, longitude: location.longitude };
+        await AsyncStorage.setItem('photoLocations', JSON.stringify(stored));
+        console.log('Saved location for asset ID:', asset.id, location.latitude, location.longitude);
+      } else {
+        console.log('No location available when taking photo');
+      }
+
+      const locationStr = location
+        ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`
+        : null;
+      await sendPhotoSavedNotification(locationStr);
     } catch (e) {
       console.error('Photo error:', e);
     } finally {
@@ -77,7 +87,6 @@ export default function CameraScreen() {
     <View style={styles.container}>
       <CameraView ref={cameraRef} style={styles.camera} facing={facing}>
 
-        {/* Location + weather overlay at the bottom */}
         <View style={styles.overlay}>
           <View style={styles.infoRow}>
             <Ionicons name="location" size={14} color="#4ECDC4" />
@@ -92,7 +101,6 @@ export default function CameraScreen() {
           </View>
         </View>
 
-        {/* Shutter + flip buttons */}
         <View style={styles.controls}>
           <TouchableOpacity
             style={styles.flipBtn}
@@ -109,7 +117,6 @@ export default function CameraScreen() {
             <View style={styles.shutterInner} />
           </TouchableOpacity>
 
-          {/* Spacer to center shutter button */}
           <View style={{ width: 56 }} />
         </View>
 
@@ -126,7 +133,6 @@ const styles = StyleSheet.create({
   btn: { backgroundColor: '#4ECDC4', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 24 },
   btnText: { color: '#fff', fontWeight: '600' },
 
-  // Location/weather overlay
   overlay: {
     position: 'absolute', bottom: 120, left: 0, right: 0,
     alignItems: 'center', gap: 4,
@@ -137,7 +143,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6,
   },
 
-  // Shutter controls
   controls: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: 40, paddingBottom: 40,
@@ -149,7 +154,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   shutterBtnDisabled: { opacity: 0.5 },
-  shutterInner: {
-    width: 56, height: 56, borderRadius: 28, backgroundColor: '#fff',
-  },
+  shutterInner: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#fff' },
 });
